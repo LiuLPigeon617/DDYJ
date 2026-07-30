@@ -55,7 +55,7 @@ jobs:
       - name: Override beforeBuildCommand for CI
         run: |
           # Skip vue-tsc in CI since frontend was already built
-          sed -i '' 's/"npm run build"/"vite build"/' src-tauri/tauri.conf.json
+          sed -i '' 's/"npm run build"/"npx vite build"/' src-tauri/tauri.conf.json
 
       - name: Initialize iOS project
         run: npx tauri ios init
@@ -70,10 +70,13 @@ jobs:
             exit 1
           fi
           echo "Found Xcode project: $PROJECT"
-          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PROJECT"
-          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' "$PROJECT"
-          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' "$PROJECT"
+          # Clear any code signing identity (handles "iPhone Developer", "Apple Development", etc.)
+          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' "$PROJECT"
+          # Remove entitlements line - entitlements force code signing
+          sed -i '' '/CODE_SIGN_ENTITLEMENTS = /d' "$PROJECT"
           echo "::notice::Code signing disabled in Xcode project"
+          echo "Verifying..."
+          grep -n "CODE_SIGN" "$PROJECT" || echo "(no CODE_SIGN lines remain)"
 
       - name: Build iOS (simulator)
         run: |
