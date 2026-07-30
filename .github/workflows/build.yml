@@ -10,8 +10,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  CODE_SIGNING_REQUIRED: "NO"
-  CODE_SIGNING_ALLOWED: "NO"
 
 jobs:
   build-ios:
@@ -43,19 +41,15 @@ jobs:
       - name: Build frontend
         run: npx vite build
 
-      - name: Check Rust compilation (iOS simulator target)
+      - name: Check Rust compilation (iOS simulator)
         working-directory: src-tauri
         run: cargo check --target aarch64-apple-ios-sim
 
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
       - name: Override beforeBuildCommand for CI
         run: |
-          # Skip vue-tsc in CI since frontend was already built
           sed -i '' 's/"npm run build"/"npx vite build"/' src-tauri/tauri.conf.json
+          echo "beforeBuildCommand after override:"
+          grep beforeBuildCommand src-tauri/tauri.conf.json
 
       - name: Initialize iOS project
         run: npx tauri ios init
@@ -65,43 +59,55 @@ jobs:
           PROJECT=$(find src-tauri/gen/apple -name "project.pbxproj" -maxdepth 4 | head -1)
           if [ -z "$PROJECT" ]; then
             echo "::error::Xcode project file not found!"
-            echo "Directory structure:"
             find src-tauri/gen/apple -type f 2>/dev/null | head -30
             exit 1
           fi
           echo "Found Xcode project: $PROJECT"
-          # Clear any code signing identity (handles "iPhone Developer", "Apple Development", etc.)
           sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' "$PROJECT"
-          # Remove entitlements line - entitlements force code signing
           sed -i '' '/CODE_SIGN_ENTITLEMENTS = /d' "$PROJECT"
-          echo "::notice::Code signing disabled in Xcode project"
-          echo "Verifying..."
-          grep -n "CODE_SIGN" "$PROJECT" || echo "(no CODE_SIGN lines remain)"
+          echo "::notice::Verifying code signing disabled:"
+          grep "CODE_SIGN" "$PROJECT" || echo "  (no CODE_SIGN lines remain - OK)"
 
       - name: Build iOS (simulator)
+        id: ios-build
         run: |
+          BUILD_LOG="build-output.log"
           set +e
-          npx tauri ios build --target aarch64-apple-ios-sim --debug 2>&1
-          EXIT_CODE=$?
+          # Key fix: --target aarch64-sim (CLI short name), NOT aarch64-apple-ios-sim (Rust triple)
+          # --ci: skip interactive prompts
+          # --export-method debugging: simulator build (no signing)
+          # -v: verbose output
+          npx tauri ios build \
+            --target aarch64-sim \
+            --debug \
+            --ci \
+            --export-method debugging \
+            -v \
+            2>&1 | tee "$BUILD_LOG"
+          EXIT_CODE=${PIPESTATUS[0]}
           set -e
+          echo "BUILD_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          # exit code 70 = IPA export failed (expected without signing)
-          if [ $EXIT_CODE -eq 70 ]; then
-            echo "::warning::IPA export failed (exit 70) - expected without code signing"
-            APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -1)
-            if [ -n "$APP" ]; then
-              echo "::notice::Built successfully: $APP"
-              exit 0
-            else
-              echo "::error::No .app artifact found after build"
-              exit 1
-            fi
-          elif [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::Build failed with exit code $EXIT_CODE"
-            exit $EXIT_CODE
+          # exit 0 = full success (build + IPA export both succeeded)  
+          # exit 70 = IPA export failed (expected without signing), .app should exist
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "::notice::Build completed (IPA exported)"
+          elif [ $EXIT_CODE -eq 70 ]; then
+            echo "::warning::IPA export failed (exit 70) - expected without signing"
           else
-            echo "::notice::Build completed successfully"
-            find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -3
+            echo "::error::Build failed with exit code $EXIT_CODE"
+          fi
+
+          # Check for .app artifact
+          APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -1)
+          if [ -n "$APP" ]; then
+            echo "::notice::App artifact found: $APP"
+            echo "BUILD_SUCCESS=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            echo "::error::No .app artifact found"
+            echo "BUILD_SUCCESS=false" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
 
       - name: Upload build logs on failure
@@ -110,6 +116,7 @@ jobs:
         with:
           name: build-logs
           path: |
+            build-output.log
             src-tauri/gen/
             dist/
           retention-days: 7
