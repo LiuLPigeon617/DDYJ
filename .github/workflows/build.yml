@@ -10,6 +10,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CODE_SIGNING_REQUIRED: "NO"
+  CODE_SIGNING_ALLOWED: "NO"
 
 jobs:
   build-ios:
@@ -50,14 +52,54 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Override beforeBuildCommand for CI
+        run: |
+          # Skip vue-tsc in CI since frontend was already built
+          sed -i '' 's/"npm run build"/"vite build"/' src-tauri/tauri.conf.json
+
       - name: Initialize iOS project
         run: npx tauri ios init
 
-      - name: Build iOS (simulator, no-sign)
-        run: npx tauri ios build --target aarch64-apple-ios-sim --no-sign --debug
-        env:
-          CODE_SIGNING_REQUIRED: "NO"
-          CODE_SIGNING_ALLOWED: "NO"
+      - name: Disable iOS code signing
+        run: |
+          PROJECT=$(find src-tauri/gen/apple -name "project.pbxproj" -maxdepth 4 | head -1)
+          if [ -z "$PROJECT" ]; then
+            echo "::error::Xcode project file not found!"
+            echo "Directory structure:"
+            find src-tauri/gen/apple -type f 2>/dev/null | head -30
+            exit 1
+          fi
+          echo "Found Xcode project: $PROJECT"
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PROJECT"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' "$PROJECT"
+          sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' "$PROJECT"
+          echo "::notice::Code signing disabled in Xcode project"
+
+      - name: Build iOS (simulator)
+        run: |
+          set +e
+          npx tauri ios build --target aarch64-apple-ios-sim --debug 2>&1
+          EXIT_CODE=$?
+          set -e
+
+          # exit code 70 = IPA export failed (expected without signing)
+          if [ $EXIT_CODE -eq 70 ]; then
+            echo "::warning::IPA export failed (exit 70) - expected without code signing"
+            APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -1)
+            if [ -n "$APP" ]; then
+              echo "::notice::Built successfully: $APP"
+              exit 0
+            else
+              echo "::error::No .app artifact found after build"
+              exit 1
+            fi
+          elif [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Build failed with exit code $EXIT_CODE"
+            exit $EXIT_CODE
+          else
+            echo "::notice::Build completed successfully"
+            find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -3
+          fi
 
       - name: Upload build logs on failure
         if: failure()
