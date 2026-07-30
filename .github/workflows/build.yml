@@ -41,9 +41,9 @@ jobs:
       - name: Build frontend
         run: npx vite build
 
-      - name: Check Rust compilation (iOS simulator)
+      - name: Check Rust compilation (iOS device)
         working-directory: src-tauri
-        run: cargo check --target aarch64-apple-ios-sim
+        run: cargo check --target aarch64-apple-ios
 
       - name: Override beforeBuildCommand for CI
         run: |
@@ -68,56 +68,66 @@ jobs:
           echo "::notice::Verifying code signing disabled:"
           grep "CODE_SIGN" "$PROJECT" || echo "  (no CODE_SIGN lines remain - OK)"
 
-      - name: Build iOS (simulator)
+      - name: Build for iOS device (xcodebuild, no signing)
         id: ios-build
         run: |
           BUILD_LOG="build-output.log"
+          XCODE_DIR="src-tauri/gen/apple"
+
+          # xcodebuild with all signing disabled — produces bare .app for device
           set +e
-          # Key fix: --target aarch64-sim (CLI short name), NOT aarch64-apple-ios-sim (Rust triple)
-          # --ci: skip interactive prompts
-          # --export-method debugging: simulator build (no signing)
-          # -v: verbose output
-          npx tauri ios build \
-            --target aarch64-sim \
-            --debug \
-            --ci \
-            --export-method debugging \
-            -v \
-            2>&1 | tee "$BUILD_LOG"
+          cd "$XCODE_DIR"
+          xcodebuild \
+            -project ddyj.xcodeproj \
+            -scheme ddyj_iOS \
+            -sdk iphoneos \
+            -configuration Debug \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            DEVELOPMENT_TEAM="" \
+            CONFIGURATION_BUILD_DIR="$(pwd)/build" \
+            clean build \
+            2>&1 | tee "../../../$BUILD_LOG"
           EXIT_CODE=${PIPESTATUS[0]}
           set -e
-          echo "BUILD_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          cd ../../..
 
-          # exit 0 = full success (build + IPA export both succeeded)  
-          # exit 70 = IPA export failed (expected without signing), .app should exist
-          if [ $EXIT_CODE -eq 0 ]; then
-            echo "::notice::Build completed (IPA exported)"
-          elif [ $EXIT_CODE -eq 70 ]; then
-            echo "::warning::IPA export failed (exit 70) - expected without signing"
-          else
-            echo "::error::Build failed with exit code $EXIT_CODE"
-          fi
+          # Find .app
+          APP=$(find "$XCODE_DIR/build" -name "*.app" -maxdepth 3 -type d 2>/dev/null | head -1)
 
-          # Check for .app artifact
-          APP=$(find src-tauri/gen/apple/build -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -1)
           if [ -n "$APP" ]; then
-            echo "::notice::App artifact found: $APP"
+            echo "::notice::App built successfully: $APP"
+
+            # Package into unsigned IPA (Payload/*.app + zip)
+            rm -rf output
+            mkdir -p output/Payload
+            cp -R "$APP" output/Payload/
+            cd output
+            zip -r ../DDYJ-unsigned.ipa Payload/
+            cd ..
+            rm -rf output
+
+            echo "::notice::Unsigned IPA created: DDYJ-unsigned.ipa ($(du -sh DDYJ-unsigned.ipa | cut -f1))"
             echo "BUILD_SUCCESS=true" >> "$GITHUB_OUTPUT"
-            exit 0
           else
-            echo "::error::No .app artifact found"
-            echo "BUILD_SUCCESS=false" >> "$GITHUB_OUTPUT"
+            echo "::error::xcodebuild failed (exit $EXIT_CODE) and no .app found"
+            echo "::group::build directory contents"
+            find "$XCODE_DIR/build" -type d 2>/dev/null | head -50
+            echo "::endgroup::"
+            echo "::group::DerivedData search"
+            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -10
+            echo "::endgroup::"
             exit 1
           fi
 
-      - name: Upload .app artifact (success)
+      - name: Upload unsigned IPA
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: DDYJ-simulator
-          path: |
-            src-tauri/gen/apple/build/**/*.app
-          retention-days: 7
+          name: DDYJ-unsigned
+          path: DDYJ-unsigned.ipa
+          retention-days: 30
 
       - name: Upload build logs on failure
         if: failure()
