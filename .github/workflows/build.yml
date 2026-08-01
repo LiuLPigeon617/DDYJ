@@ -98,17 +98,7 @@ jobs:
 
           if [ -n "$APP" ]; then
             echo "::notice::App built successfully: $APP"
-
-            # Package into unsigned IPA (Payload/*.app + zip)
-            rm -rf output
-            mkdir -p output/Payload
-            cp -R "$APP" output/Payload/
-            cd output
-            zip -r ../DDYJ-unsigned.ipa Payload/
-            cd ..
-            rm -rf output
-
-            echo "::notice::Unsigned IPA created: DDYJ-unsigned.ipa ($(du -sh DDYJ-unsigned.ipa | cut -f1))"
+            echo "APP_PATH=$APP" >> "$GITHUB_OUTPUT"
             echo "BUILD_SUCCESS=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::xcodebuild failed (exit $EXIT_CODE) and no .app found"
@@ -121,6 +111,130 @@ jobs:
             exit 1
           fi
 
+      - name: Verify and fix Info.plist
+        run: |
+          APP="${{ steps.ios-build.outputs.APP_PATH }}"
+          echo "=== App path: $APP ==="
+          echo "=== .app directory name: $(basename "$APP") ==="
+
+          PLIST="$APP/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Info.plist not found in .app!"
+            exit 1
+          fi
+
+          echo "=== Info.plist contents (raw) ==="
+          plutil -p "$PLIST" || cat "$PLIST"
+
+          echo ""
+          echo "=== Checking critical keys ==="
+
+          # Check CFBundleExecutable
+          BUNDLE_EXEC=$(plutil -extract CFBundleExecutable raw "$PLIST" 2>/dev/null || echo "")
+          if [ -z "$BUNDLE_EXEC" ] || [ "$BUNDLE_EXEC" = "$(null)" ]; then
+            echo "::error::CFBundleExecutable is missing or null!"
+            # Fix: set it to the .app directory name without extension
+            APP_NAME=$(basename "$APP" .app)
+            echo "  -> Fixing CFBundleExecutable to: $APP_NAME"
+            plutil -replace CFBundleExecutable -string "$APP_NAME" "$PLIST"
+          else
+            echo "  CFBundleExecutable = $BUNDLE_EXEC (OK)"
+          fi
+
+          # Check CFBundleIdentifier
+          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$PLIST" 2>/dev/null || echo "")
+          if [ -z "$BUNDLE_ID" ] || [ "$BUNDLE_ID" = "$(null)" ]; then
+            echo "::error::CFBundleIdentifier is missing or null!"
+            plutil -replace CFBundleIdentifier -string "com.ddyj.earthquake" "$PLIST"
+          else
+            echo "  CFBundleIdentifier = $BUNDLE_ID (OK)"
+          fi
+
+          # Check CFBundleName
+          BUNDLE_NAME=$(plutil -extract CFBundleName raw "$PLIST" 2>/dev/null || echo "")
+          if [ -z "$BUNDLE_NAME" ] || [ "$BUNDLE_NAME" = "$(null)" ]; then
+            echo "::warning::CFBundleName is missing or null, setting to DDYJ"
+            plutil -replace CFBundleName -string "DDYJ" "$PLIST"
+          else
+            echo "  CFBundleName = $BUNDLE_NAME (OK)"
+          fi
+
+          # Check CFBundleShortVersionString
+          BUNDLE_VERSION=$(plutil -extract CFBundleShortVersionString raw "$PLIST" 2>/dev/null || echo "")
+          if [ -z "$BUNDLE_VERSION" ] || [ "$BUNDLE_VERSION" = "$(null)" ]; then
+            echo "::warning::CFBundleShortVersionString is missing, setting to 0.1.0"
+            plutil -replace CFBundleShortVersionString -string "0.1.0" "$PLIST"
+          fi
+
+          # Verify executable exists inside .app
+          BUNDLE_EXEC=$(plutil -extract CFBundleExecutable raw "$PLIST" 2>/dev/null)
+          if [ ! -f "$APP/$BUNDLE_EXEC" ]; then
+            echo "::error::Executable file '$BUNDLE_EXEC' not found inside .app!"
+            echo "  Contents of .app:"
+            ls -la "$APP/"
+            exit 1
+          fi
+          echo "  Executable '$BUNDLE_EXEC' exists in .app (OK)"
+
+          echo ""
+          echo "=== Fixed Info.plist ==="
+          plutil -p "$PLIST"
+
+      - name: Ad-hoc sign the app
+        run: |
+          APP="${{ steps.ios-build.outputs.APP_PATH }}"
+
+          # Create entitlements file with get-task-allow (required by LiveContainer)
+          cat > /tmp/entitlements.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>get-task-allow</key>
+              <true/>
+              <key>com.apple.security.cs.allow-jit</key>
+              <true/>
+              <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          echo "=== Ad-hoc signing the .app ==="
+          # codesign -s - does ad-hoc signing (no certificate needed)
+          # This allows LiveContainer JIT-Less mode to properly load the app
+          codesign -f -s - --entitlements /tmp/entitlements.plist "$APP"
+          echo "Ad-hoc signing complete"
+
+          # Verify signing
+          echo "=== Verifying signature ==="
+          codesign -dvv "$APP" 2>&1 || echo "(verification output above)"
+
+      - name: Package IPA
+        run: |
+          APP="${{ steps.ios-build.outputs.APP_PATH }}"
+
+          echo "=== Packaging IPA ==="
+          rm -rf output
+          mkdir -p output/Payload
+          cp -R "$APP" output/Payload/
+
+          # Verify Payload structure
+          echo "=== Payload structure ==="
+          find output -maxdepth 3 -type f | head -30
+          echo ""
+
+          cd output
+          zip -r ../DDYJ-unsigned.ipa Payload/
+          cd ..
+          rm -rf output
+
+          echo "::notice::IPA created: DDYJ-unsigned.ipa ($(du -sh DDYJ-unsigned.ipa | cut -f1))"
+
+          # Verify IPA structure
+          echo "=== IPA contents ==="
+          unzip -l DDYJ-unsigned.ipa | head -20
+
       - name: Upload unsigned IPA
         if: success()
         uses: actions/upload-artifact@v4
@@ -128,6 +242,15 @@ jobs:
           name: DDYJ-unsigned
           path: DDYJ-unsigned.ipa
           retention-days: 30
+
+      - name: Upload build diagnostics (success)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            build-output.log
+          retention-days: 7
 
       - name: Upload build logs on failure
         if: failure()
