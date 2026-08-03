@@ -47,20 +47,17 @@ jobs:
           key: macos15-v1
 
       - name: Install npm dependencies
-        run: |
-          node -v
-          npm -v
-          which npm
-          npm install
+        run: npm ci
 
       - name: Build frontend
         run: npx vite build
 
       - name: Check Rust compilation (iOS device)
         working-directory: src-tauri
-        run: |
-          cargo update
-          cargo check --target aarch64-apple-ios
+        run: cargo check --target aarch64-apple-ios
+
+      - name: Print Tauri CLI version
+        run: npx tauri --version
 
       - name: Override beforeBuildCommand for CI
         run: |
@@ -149,6 +146,14 @@ jobs:
             echo "::group::Last 200 lines of build log"
             tail -200 "../../../$BUILD_LOG" 2>/dev/null || true
             echo "::endgroup::"
+            # Output key error lines as annotations (visible via API)
+            echo "=== Extracting error lines from build log ==="
+            grep -i "error:" "../../../$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            grep -i "fatal\|failed\|cannot\|unable to" "../../../$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
+              echo "::warning::$line"
+            done
             exit 1
           fi
 
