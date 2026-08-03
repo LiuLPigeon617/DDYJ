@@ -13,17 +13,27 @@ env:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Print environment info
+        run: |
+          echo "=== Xcode version ==="
+          xcodebuild -version
+          echo "=== SDK versions ==="
+          xcodebuild -showsdks | grep iphoneos
+          echo "=== macOS version ==="
+          sw_vers
+          echo "=== Rust version ==="
+          rustc --version
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
-          cache: npm
+          node-version: 24
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -34,16 +44,23 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: macos15-v1
 
       - name: Install npm dependencies
-        run: npm ci
+        run: |
+          node -v
+          npm -v
+          which npm
+          npm install
 
       - name: Build frontend
         run: npx vite build
 
       - name: Check Rust compilation (iOS device)
         working-directory: src-tauri
-        run: cargo check --target aarch64-apple-ios
+        run: |
+          cargo update
+          cargo check --target aarch64-apple-ios
 
       - name: Override beforeBuildCommand for CI
         run: |
@@ -86,6 +103,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
             CONFIGURATION_BUILD_DIR="$(pwd)/build" \
             clean build \
             2>&1 | tee "../../../$BUILD_LOG"
@@ -129,8 +147,8 @@ jobs:
             echo "::group::DerivedData search"
             find ~/Library/Developer/Xcode/DerivedData -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -10
             echo "::endgroup::"
-            echo "::group::Last 50 lines of build log"
-            tail -50 "../../../$BUILD_LOG" 2>/dev/null || true
+            echo "::group::Last 100 lines of build log"
+            tail -100 "../../../$BUILD_LOG" 2>/dev/null || true
             echo "::endgroup::"
             exit 1
           fi
