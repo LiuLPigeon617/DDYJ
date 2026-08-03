@@ -103,7 +103,6 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             DEVELOPMENT_TEAM="" \
-            ONLY_ACTIVE_ARCH=NO \
             CONFIGURATION_BUILD_DIR="$(pwd)/build" \
             clean build \
             2>&1 | tee "../../../$BUILD_LOG"
@@ -147,8 +146,8 @@ jobs:
             echo "::group::DerivedData search"
             find ~/Library/Developer/Xcode/DerivedData -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -10
             echo "::endgroup::"
-            echo "::group::Last 100 lines of build log"
-            tail -100 "../../../$BUILD_LOG" 2>/dev/null || true
+            echo "::group::Last 200 lines of build log"
+            tail -200 "../../../$BUILD_LOG" 2>/dev/null || true
             echo "::endgroup::"
             exit 1
           fi
