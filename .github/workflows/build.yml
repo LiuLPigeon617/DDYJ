@@ -88,6 +88,12 @@ jobs:
           BUILD_LOG="build-output.log"
           XCODE_DIR="src-tauri/gen/apple"
 
+          # Create dummy server-addr file to prevent Tauri CLI panic
+          # (tauri ios xcode-script expects this file which is normally created by tauri ios dev/build)
+          ADDR_FILE="${TMPDIR:-/tmp}/com.ddyj.earthquake-server-addr"
+          echo "" > "$ADDR_FILE"
+          echo "Created server-addr file: $ADDR_FILE"
+
           # xcodebuild with all signing disabled — produces bare .app for device
           set +e
           cd "$XCODE_DIR"
