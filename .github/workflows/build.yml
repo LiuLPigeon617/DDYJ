@@ -84,72 +84,42 @@ jobs:
           echo "::notice::Verifying code signing disabled:"
           grep "CODE_SIGN" "$PBXPROJ" || echo "  (no CODE_SIGN lines remain - OK)"
 
-      - name: Build for iOS device (xcodebuild, no signing)
+      - name: Build for iOS device (tauri ios build, no signing)
         id: ios-build
         run: |
           BUILD_LOG="build-output.log"
           XCODE_DIR="src-tauri/gen/apple"
 
-          # Create dummy server-addr file to prevent Tauri CLI panic
-          # (tauri ios xcode-script expects this file which is normally created by tauri ios dev/build)
-          ADDR_FILE="${TMPDIR:-/tmp}/com.ddyj.earthquake-server-addr"
-          echo "" > "$ADDR_FILE"
-          echo "Created server-addr file: $ADDR_FILE"
-
-          PROJECT=$(find "$XCODE_DIR" -name "*.xcodeproj" -maxdepth 5 | head -1)
-          if [ -z "$PROJECT" ]; then
-            echo "::error::Xcode project file not found in $XCODE_DIR"
-            find "$XCODE_DIR" -type f 2>/dev/null | head -50
-            exit 1
-          fi
-          echo "Using Xcode project: $PROJECT"
-
-          SCHEMES=$(xcodebuild -list -project "$PROJECT" 2>&1 | sed -n '/Schemes:/,/^$/p' | tail -n +2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          echo "Available schemes:"
-          echo "$SCHEMES"
-          SCHEME=$(printf '%s\n' "$SCHEMES" | grep -E '^(ddyj_iOS|DDYJ_iOS|ddyj iOS|DDYJ iOS|ddyj|DDYJ)$' | head -1)
-          if [ -z "$SCHEME" ]; then
-            SCHEME=$(printf '%s\n' "$SCHEMES" | head -1)
-          fi
-          if [ -z "$SCHEME" ]; then
-            echo "::error::Could not determine an Xcode scheme. Please verify the generated project." 
-            exit 1
-          fi
-          echo "Using scheme: $SCHEME"
-
-          # xcodebuild with all signing disabled — produces bare .app for device
+          # Use `tauri ios build` instead of raw xcodebuild.
+          # Raw xcodebuild triggers the 'Build Rust Code' PhaseScriptExecution, which calls
+          # `tauri ios xcode-script`. That script reads a server-addr file and connects to a
+          # WebSocket server normally started by `tauri ios dev`; in CI no such server exists,
+          # so the Tauri CLI panics (mobile/mod.rs:386/392: EmptyHost / missing addr file),
+          # which is the real root cause of "xcodebuild exit 65".
+          # `tauri ios build` passes all options internally and works without a dev server.
           set +e
-          xcodebuild \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -sdk iphoneos \
-            -configuration Debug \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            DEVELOPMENT_TEAM="" \
-            CONFIGURATION_BUILD_DIR="$XCODE_DIR/build" \
-            clean build \
-            2>&1 | tee "$BUILD_LOG"
+          npx tauri ios build             --target aarch64-apple-ios             --debug             --ci             -v             2>&1 | tee "$BUILD_LOG"
           EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
-          echo "=== xcodebuild exit code: $EXIT_CODE ==="
+          echo "=== tauri ios build exit code: $EXIT_CODE ==="
 
-          # List ALL .app directories found
+          # exit 0 = full success; exit 70 = IPA export failed (expected without signing) - .app should exist
+          if [ "$EXIT_CODE" -eq 0 ] || [ "$EXIT_CODE" -eq 70 ]; then
+            echo "::notice::tauri ios build finished (exit $EXIT_CODE)"
+          else
+            echo "::error::tauri ios build failed with exit code $EXIT_CODE"
+          fi
+
+          # Find the real .app (the one with the most files)
           echo "=== All .app directories found ==="
-          find "$XCODE_DIR/build" -name "*.app" -type d 2>/dev/null | while read app; do
-            FILE_COUNT=$(find "$app" -type f 2>/dev/null | wc -l | tr -d ' ')
-            HAS_PLIST="no"
-            [ -f "$app/Info.plist" ] && HAS_PLIST="yes"
-            echo "  $app (files: $FILE_COUNT, Info.plist: $HAS_PLIST)"
-          done
-
-          # Find the .app that has the most files (likely the real product)
           APP=""
           BEST_COUNT=0
           for candidate in $(find "$XCODE_DIR/build" -name "*.app" -type d 2>/dev/null); do
             FILE_COUNT=$(find "$candidate" -type f 2>/dev/null | wc -l | tr -d ' ')
+            HAS_PLIST="no"
+            [ -f "$candidate/Info.plist" ] && HAS_PLIST="yes"
+            echo "  $candidate (files: $FILE_COUNT, Info.plist: $HAS_PLIST)"
             if [ "$FILE_COUNT" -gt "$BEST_COUNT" ]; then
               BEST_COUNT=$FILE_COUNT
               APP="$candidate"
@@ -163,18 +133,13 @@ jobs:
             echo "=== Contents of selected .app ==="
             ls -la "$APP/"
           else
-            echo "::error::xcodebuild failed (exit $EXIT_CODE) and no valid .app found"
+            echo "::error::Build failed (exit $EXIT_CODE) and no valid .app found"
             echo "::group::build directory contents"
             find "$XCODE_DIR/build" -type f 2>/dev/null | head -50
-            echo "::endgroup::"
-            echo "::group::DerivedData search"
-            find ~/Library/Developer/Xcode/DerivedData -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -10
             echo "::endgroup::"
             echo "::group::Last 200 lines of build log"
             tail -200 "$BUILD_LOG" 2>/dev/null || true
             echo "::endgroup::"
-            # Output key error lines as annotations (visible via API)
-            echo "=== Extracting error lines from build log ==="
             grep -i "error:" "$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
               echo "::error::$line"
             done
