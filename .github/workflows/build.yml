@@ -98,7 +98,7 @@ jobs:
           # which is the real root cause of "xcodebuild exit 65".
           # `tauri ios build` passes all options internally and works without a dev server.
           set +e
-          npx tauri ios build             --target aarch64-apple-ios             --debug             --ci             -v             2>&1 | tee "$BUILD_LOG"
+          npx tauri ios build --target aarch64 --debug --ci -v 2>&1 | tee "$BUILD_LOG"
           EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
