@@ -81,3 +81,11 @@ npx tauri ios build     # 构建 iOS 发布包
 - **Rust** (rustup 安装)
 - **macOS + Xcode** (iOS 构建必需)
 - **Apple Developer 账号** (真机部署/发布必需)
+
+## 许可证
+
+本项目采用 [知识共享署名-非商业性使用-相同方式共享 4.0 国际许可协议 (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授权。
+
+**禁止将本代码用于任何商业用途。** 任何形式的商业化使用（上架付费/含广告应用、企业内商用、商业定制等）需获得作者另行授权。
+
+详见 [LICENSE](LICENSE)。
