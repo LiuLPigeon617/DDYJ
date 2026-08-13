@@ -205,7 +205,7 @@ jobs:
             <key>CFBundleName</key>
             <string>DDYJ</string>
             <key>CFBundleDisplayName</key>
-            <string>地震预警</string>
+            <string>地动预警</string>
             <key>CFBundlePackageType</key>
             <string>APPL</string>
             <key>CFBundleShortVersionString</key>

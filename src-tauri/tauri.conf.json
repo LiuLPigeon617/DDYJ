@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "DDYJ 地震预警",
+        "title": "DDYJ 地动预警",
         "width": 375,
         "height": 812,
         "resizable": false,

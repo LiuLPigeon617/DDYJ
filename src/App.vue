@@ -1,7 +1,7 @@
 <template>
   <div class="app">
     <div class="app-header">
-      <div class="header-title">地震预警</div>
+      <div class="header-title">地动预警</div>
       <div class="header-right">
         <span v-if="store.lastUpdate" class="update-time">{{ store.lastUpdate }}</span>
         <button class="refresh-btn" @click="store.fetchEarthquakes" :disabled="store.loading">

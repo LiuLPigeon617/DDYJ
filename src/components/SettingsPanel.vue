@@ -93,7 +93,7 @@
     </div>
 
     <div class="app-info">
-      <div class="app-name">DDYJ 地震预警</div>
+      <div class="app-name">DDYJ 地动预警</div>
       <div class="app-version">v0.1.0 · Tauri 2 + Rust + Vue 3</div>
     </div>
   </div>

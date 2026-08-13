@@ -1,6 +1,6 @@
-# DDYJ 地震预警
+# DDYJ 地动预警
 
-基于 **Tauri 2 + Rust + Vue 3** 的 iOS 地震预警应用。
+基于 **Tauri 2 + Rust + Vue 3** 的 iOS 地动预警应用。
 
 ## 功能
 

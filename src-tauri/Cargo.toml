@@ -1,7 +1,7 @@
 [package]
 name = "ddyj"
 version = "0.1.0"
-description = "DDYJ 地震预警 iOS 应用"
+description = "DDYJ 地动预警 iOS 应用"
 authors = ["DDYJ"]
 edition = "2021"
 
