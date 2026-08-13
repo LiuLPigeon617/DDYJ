@@ -70,17 +70,19 @@ jobs:
 
       - name: Disable iOS code signing
         run: |
-          PROJECT=$(find src-tauri/gen/apple -name "project.pbxproj" -maxdepth 4 | head -1)
-          if [ -z "$PROJECT" ]; then
-            echo "::error::Xcode project file not found!"
-            find src-tauri/gen/apple -type f 2>/dev/null | head -30
+          PROJECT=$(find src-tauri/gen/apple -name "*.xcodeproj" -maxdepth 5 | head -1)
+          PBXPROJ=$(find src-tauri/gen/apple -name "project.pbxproj" -maxdepth 6 | head -1)
+          if [ -z "$PROJECT" ] || [ -z "$PBXPROJ" ]; then
+            echo "::error::Xcode project or pbxproj file not found!"
+            find src-tauri/gen/apple -type f 2>/dev/null | head -50
             exit 1
           fi
           echo "Found Xcode project: $PROJECT"
-          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' "$PROJECT"
-          sed -i '' '/CODE_SIGN_ENTITLEMENTS = /d' "$PROJECT"
+          echo "Found PBXPROJ: $PBXPROJ"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "[^"]*";/CODE_SIGN_IDENTITY = "";/g' "$PBXPROJ"
+          sed -i '' '/CODE_SIGN_ENTITLEMENTS = /d' "$PBXPROJ"
           echo "::notice::Verifying code signing disabled:"
-          grep "CODE_SIGN" "$PROJECT" || echo "  (no CODE_SIGN lines remain - OK)"
+          grep "CODE_SIGN" "$PBXPROJ" || echo "  (no CODE_SIGN lines remain - OK)"
 
       - name: Build for iOS device (xcodebuild, no signing)
         id: ios-build
@@ -94,24 +96,43 @@ jobs:
           echo "" > "$ADDR_FILE"
           echo "Created server-addr file: $ADDR_FILE"
 
+          PROJECT=$(find "$XCODE_DIR" -name "*.xcodeproj" -maxdepth 5 | head -1)
+          if [ -z "$PROJECT" ]; then
+            echo "::error::Xcode project file not found in $XCODE_DIR"
+            find "$XCODE_DIR" -type f 2>/dev/null | head -50
+            exit 1
+          fi
+          echo "Using Xcode project: $PROJECT"
+
+          SCHEMES=$(xcodebuild -list -project "$PROJECT" 2>&1 | sed -n '/Schemes:/,/^$/p' | tail -n +2 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          echo "Available schemes:"
+          echo "$SCHEMES"
+          SCHEME=$(printf '%s\n' "$SCHEMES" | grep -E '^(ddyj_iOS|DDYJ_iOS|ddyj iOS|DDYJ iOS|ddyj|DDYJ)$' | head -1)
+          if [ -z "$SCHEME" ]; then
+            SCHEME=$(printf '%s\n' "$SCHEMES" | head -1)
+          fi
+          if [ -z "$SCHEME" ]; then
+            echo "::error::Could not determine an Xcode scheme. Please verify the generated project." 
+            exit 1
+          fi
+          echo "Using scheme: $SCHEME"
+
           # xcodebuild with all signing disabled — produces bare .app for device
           set +e
-          cd "$XCODE_DIR"
           xcodebuild \
-            -project ddyj.xcodeproj \
-            -scheme ddyj_iOS \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
             -sdk iphoneos \
             -configuration Debug \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             DEVELOPMENT_TEAM="" \
-            CONFIGURATION_BUILD_DIR="$(pwd)/build" \
+            CONFIGURATION_BUILD_DIR="$XCODE_DIR/build" \
             clean build \
-            2>&1 | tee "../../../$BUILD_LOG"
+            2>&1 | tee "$BUILD_LOG"
           EXIT_CODE=${PIPESTATUS[0]}
           set -e
-          cd ../../..
 
           echo "=== xcodebuild exit code: $EXIT_CODE ==="
 
@@ -150,14 +171,14 @@ jobs:
             find ~/Library/Developer/Xcode/DerivedData -name "*.app" -maxdepth 5 -type d 2>/dev/null | head -10
             echo "::endgroup::"
             echo "::group::Last 200 lines of build log"
-            tail -200 "../../../$BUILD_LOG" 2>/dev/null || true
+            tail -200 "$BUILD_LOG" 2>/dev/null || true
             echo "::endgroup::"
             # Output key error lines as annotations (visible via API)
             echo "=== Extracting error lines from build log ==="
-            grep -i "error:" "../../../$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
+            grep -i "error:" "$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
               echo "::error::$line"
             done
-            grep -i "fatal\|failed\|cannot\|unable to" "../../../$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
+            grep -i "fatal\|failed\|cannot\|unable to" "$BUILD_LOG" 2>/dev/null | head -20 | while IFS= read -r line; do
               echo "::warning::$line"
             done
             exit 1
